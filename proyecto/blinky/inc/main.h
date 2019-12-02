@@ -46,9 +46,14 @@ extern "C" {
 #endif
 
 /*==================[macros]=================================================*/
+#define ADC_WT ADC_CH0
+#define ADC_IAT ADC_CH1
+#define ADC_TPS ADC_CH2
+#define ADC_MAP ADC_CH3
+
 
 /** delay in milliseconds */
-#define DELAY_MS 2000
+#define DELAY_MS 500
 
 /** led number to toggle */
 #define LED 0

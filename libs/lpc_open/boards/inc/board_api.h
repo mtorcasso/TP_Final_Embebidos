@@ -98,6 +98,9 @@ void Board_Debug_Init(void);
  * @param  ch  : character to send
  * @return None
  */
+
+void Board_Uart_Init(LPC_USART_T *pUART, uint32_t baud);  //agregada para configurar cualquier UART
+
 void Board_UARTPutChar(LPC_USART_T *pUART, char ch);
 
 /**
