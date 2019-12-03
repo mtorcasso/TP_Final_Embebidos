@@ -46,7 +46,9 @@ volatile uint8_t match_flag=0;
 volatile uint32_t time_diff=0xFFFFFFFF; //Inicializo motor detenido
 static uint32_t counter;
 
-char* itoa(int value, char* result, int base) {
+
+
+char* itoa(int32_t value, char* result, int base) {
    // check that the base if valid
    if (base < 2 || base > 36) { *result = '\0'; return result; }
 
@@ -69,11 +71,76 @@ char* itoa(int value, char* result, int base) {
    }
    return result;
 }
+ uint32_t strlen(const char* str){
+	 uint32_t i=0;
+	 while(str[i]!='\0') i++;
+	 return i;
+ }
 
+#define conv_num 1287
+#define conv_den 256
+#define engine_temp_table_size 25
+#define mat_table_size 29
 
-void SysTick_Handler(void)
-{
-	if(counter > 0) counter--;
+int32_t getEngineTemp(int32_t* v_table,int32_t* temp_table){
+	int32_t muestra=0;
+	unsigned char i=0;
+	Board_ADC_ReadBegin(ADC_CH0);
+	while(Board_ADC_ReadWait());
+	//Obtengo muestra y convierto a mV
+	muestra=((int32_t)Board_ADC_ReadEnd()*conv_num)/conv_den;
+	//Hago un ajuste lineal entre valores de la tabla
+	while ((v_table[i]<muestra) && (i<engine_temp_table_size)) i++;
+	return ((((temp_table[i]-temp_table[i-1])*(muestra-v_table[i-1]))/(v_table[i]-v_table[i-1]))+temp_table[i-1]);
+
+}
+
+int32_t getMAT(int32_t* v_table,int32_t* temp_table){
+	int32_t muestra=0;
+	unsigned char i=0;
+	Board_ADC_ReadBegin(ADC_CH1);
+	while(Board_ADC_ReadWait());
+	//Obtengo muestra y convierto a mV
+	muestra=((int32_t)Board_ADC_ReadEnd()*conv_num)/conv_den;
+
+	//Hago un ajuste lineal entre valores de la tabla
+	while ((v_table[i]<muestra) && (i<mat_table_size)) i++;
+	return ((((temp_table[i]-temp_table[i-1])*(muestra-v_table[i-1]))/(v_table[i]-v_table[i-1]))+temp_table[i-1]);
+
+}
+
+int32_t getMAP(){
+	int32_t muestra=0;
+	unsigned char i=0;
+	Board_ADC_ReadBegin(ADC_CH2);
+	while(Board_ADC_ReadWait());
+	//Obtengo muestra y convierto a mV
+	muestra=((int32_t)Board_ADC_ReadEnd()*conv_num)/conv_den;
+	//Respuesta lineal, 0v=0%, 5v=100% (recordar que uso 5v porque en la conversión de muestra ya adapte 3.3 a 5)
+	return (100*muestra)/5000;
+}
+
+int32_t getTPS(){
+	int32_t muestra=0;
+	unsigned char i=0;
+	Board_ADC_ReadBegin(ADC_CH3);
+	while(Board_ADC_ReadWait());
+	//Obtengo muestra y convierto a mV
+	muestra=((int32_t)Board_ADC_ReadEnd()*conv_num)/conv_den;
+	//Respuesta lineal, 0v=0%, 5v=100% (recordar que uso 5v porque en la conversión de muestra ya adapte 3.3 a 5)
+	return (100*muestra)/5000;
+}
+
+int32_t getRPM(){
+
+	/*La condicion de timediff mayor que 0xfffffffe se da cuando todavia falta tomar un valor para determinar
+			el periodo, o cuando el periodo es muy largo, es decir, motor detenido (ver comentarios handler timer)
+	*/
+	if (time_diff<0xFFFFFFFE){
+		//Motor 4 cil, 2 pulsos por vuelta -> 60 seg/min * 1000000uS/(2*timediff S/vuelta)
+		return (30000000/time_diff);
+	}
+	else return 0;
 }
 
 #define timer_limit 1000000
@@ -137,69 +204,96 @@ void TIMER2_IRQHandler(void)
 	}
 }
 
-
+void SysTick_Handler(void)
+{
+	if(counter > 0) counter--;
+}
 
 
 int main(void)
 {
-	uint16_t r;
-	int muestra;
+	int uart_task=255;
 	static char uartBuff[10];
+
+	int32_t EngineTemp=0;
+	int32_t MAT=0;
+	int32_t MAP=0;
+	int32_t TPS=0;
+	int32_t RPM=0;
+
+	//Tension en mV
+	int32_t tmotor_x []= {240,280,330,370,430,510,580,660,740,880,990,1150,1300,1490,1670,1910,2150,2430,2680,2940,3190,3470,3680,3900,4080};
+	//Temperatura en °C
+	int32_t tmotor_y []= {120,115,110,105,100,95,90,85,80,75,70,65,60,55,50,45,40,35,30,25,20,15,10,5,0};
+
+	//Tension en mV
+	int32_t mat_x[]={50,134,200,266,347,394,466,545,595,665,761,870,979,1142,1275,1446,1624,1821,2010,2240,2470,2680,2970,3240,3510,3720,3910,4070,4200};
+	//Temperatura en °C
+	int32_t mat_y[]={125,120,115,110,105,100,95,90,85,80,75,70,65,60,55,50,45,40,35,30,25,20,15,10,5,0,-5,-10,-15};
 
 	Timer2_incap_init();
 
-	Board_UARTPutSTR(DEBUG_UART, "Hola\n");
 	while (1)
 	{
 		if (match_flag==1){
 			match_flag=0;
 		}
 
+		uart_task=Board_UARTGetChar(BLUETOOTH_UART);
+
+		switch (uart_task){
+
+		case 0:
+			itoa(EngineTemp, uartBuff, 10 );
+			Board_UARTPutChar(BLUETOOTH_UART,strlen(uartBuff));
+			Board_UARTPutSTR(BLUETOOTH_UART, uartBuff);
+			uart_task=255;
+		break;
+
+		case 1:
+			itoa(MAT, uartBuff, 10 );;
+			Board_UARTPutChar(BLUETOOTH_UART,strlen(uartBuff));
+			Board_UARTPutSTR(BLUETOOTH_UART, uartBuff);
+			uart_task=255;
+		break;
+
+		case 2:
+			itoa(MAP, uartBuff, 10 );
+			Board_UARTPutChar(BLUETOOTH_UART,strlen(uartBuff));
+			Board_UARTPutSTR(BLUETOOTH_UART, uartBuff);
+			uart_task=255;
+		break;
+
+		case 3:
+			itoa(TPS, uartBuff, 10 );
+			Board_UARTPutChar(BLUETOOTH_UART,strlen(uartBuff));
+			Board_UARTPutSTR(BLUETOOTH_UART, uartBuff);
+			uart_task=255;
+		break;
+
+		case 4:
+			itoa(RPM, uartBuff, 10 );
+			Board_UARTPutChar(BLUETOOTH_UART,strlen(uartBuff));
+			Board_UARTPutSTR(BLUETOOTH_UART, uartBuff);
+			uart_task=255;
+		break;
+
+		default:
+			uart_task=255;
+		break;
+		}
+
 		if (counter==0){
 			counter=DELAY_MS;
 			Board_LED_Toggle(LED);
-			if (time_diff<0xFFFFFFFE){
-				itoa(time_diff, uartBuff, 10 );
-				Board_UARTPutSTR(DEBUG_UART, "Periodo en us: ");
-				Board_UARTPutSTR(DEBUG_UART, uartBuff);
-				Board_UARTPutSTR(DEBUG_UART, "\r\n");
-			}
-			else Board_UARTPutSTR(DEBUG_UART, "Motor detenido \r\n");
 
-			/*
-			Board_ADC_ReadBegin(ADC_CH0);
-			while(Board_ADC_ReadWait());
-			muestra=Board_ADC_ReadEnd();
-			itoa(muestra, uartBuff, 10 );
-			Board_UARTPutSTR(DEBUG_UART, "CH0: ");
-			Board_UARTPutSTR(DEBUG_UART, uartBuff);
-			Board_UARTPutSTR(DEBUG_UART, "\r\n");
+			//Actualizo valores de todos los sensores
+			EngineTemp=getEngineTemp(tmotor_x,tmotor_y);
+			MAT=getMAT(mat_x,mat_y);
+			MAP=getMAP();
+			TPS=getTPS();
+			RPM=getRPM();
 
-			Board_ADC_ReadBegin(ADC_CH1);
-			while(Board_ADC_ReadWait());
-			muestra=Board_ADC_ReadEnd();
-			itoa(muestra, uartBuff, 10 );
-			Board_UARTPutSTR(DEBUG_UART, "CH1: ");
-			Board_UARTPutSTR(DEBUG_UART, uartBuff);
-			Board_UARTPutSTR(DEBUG_UART, "\r\n");
-
-			Board_ADC_ReadBegin(ADC_CH2);
-			while(Board_ADC_ReadWait());
-			muestra=Board_ADC_ReadEnd();
-			itoa(muestra, uartBuff, 10 );
-			Board_UARTPutSTR(DEBUG_UART, "CH2: ");
-			Board_UARTPutSTR(DEBUG_UART, uartBuff);
-			Board_UARTPutSTR(DEBUG_UART, "\r\n");
-
-			Board_ADC_ReadBegin(ADC_CH3);
-			while(Board_ADC_ReadWait());
-			muestra=Board_ADC_ReadEnd();
-			itoa(muestra, uartBuff, 10 );
-			Board_UARTPutSTR(DEBUG_UART, "CH3: ");
-			Board_UARTPutSTR(DEBUG_UART, uartBuff);
-			Board_UARTPutSTR(DEBUG_UART, "\r\n");
-
-			*/
 		}
 	}
 }
