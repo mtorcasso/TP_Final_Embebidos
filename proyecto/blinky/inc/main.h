@@ -53,7 +53,7 @@ extern "C" {
 
 
 /** delay in milliseconds */
-#define DELAY_MS 1
+#define DELAY_MS 10
 
 /** led number to toggle */
 #define LED 0

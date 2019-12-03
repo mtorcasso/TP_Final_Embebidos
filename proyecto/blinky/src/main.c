@@ -77,64 +77,77 @@ char* itoa(int32_t value, char* result, int base) {
 	 return i;
  }
 
+ /*Defino numerador y denominador para la conversión de muestras del adc*/
+ /*La cuenta es v_real=v_pin_adc*(156/100) dado que hay un divisor resistivo. A su vez v_pin_adc= valor_adc*(3300mV/1024bits)*/
+ /* Entonces v_real=valor_adc*(1287/256)*/
 #define conv_num 1287
 #define conv_den 256
 #define engine_temp_table_size 25
 #define mat_table_size 29
 
-int32_t getEngineTemp(int32_t* v_table,int32_t* temp_table){
+int32_t getEngineTemp(int32_t* v_table,int32_t* temp_table,int16_t scale,int16_t offset){
 	int32_t muestra=0;
 	unsigned char i=0;
 	Board_ADC_ReadBegin(ADC_CH0);
 	while(Board_ADC_ReadWait());
 	//Obtengo muestra y convierto a mV
 	muestra=((int32_t)Board_ADC_ReadEnd()*conv_num)/conv_den;
+
+	char caca [10];
+	itoa(muestra, caca, 10 );
+	Board_UARTPutSTR(DEBUG_UART,caca);
+	Board_UARTPutSTR(DEBUG_UART,"\r\n");
+
 	//Hago un ajuste lineal entre valores de la tabla
 	while ((v_table[i]<muestra) && (i<engine_temp_table_size)) i++;
-	return ((((temp_table[i]-temp_table[i-1])*(muestra-v_table[i-1]))/(v_table[i]-v_table[i-1]))+temp_table[i-1]);
+	return (((((temp_table[i]-temp_table[i-1])*(muestra-v_table[i-1]))/(v_table[i]-v_table[i-1]))+temp_table[i-1])*scale/100 + offset);
 
 }
 
-int32_t getMAT(int32_t* v_table,int32_t* temp_table){
+int32_t getMAT(int32_t* v_table,int32_t* temp_table,int16_t scale,int16_t offset){
 	int32_t muestra=0;
 	unsigned char i=0;
 	Board_ADC_ReadBegin(ADC_CH1);
 	while(Board_ADC_ReadWait());
-	//Obtengo muestra y convierto a mV
+	/*Obtengo muestra y convierto a mV*/
 	muestra=((int32_t)Board_ADC_ReadEnd()*conv_num)/conv_den;
 
-	//Hago un ajuste lineal entre valores de la tabla
+	/*Hago un ajuste lineal entre valores de la tabla*/
 	while ((v_table[i]<muestra) && (i<mat_table_size)) i++;
-	return ((((temp_table[i]-temp_table[i-1])*(muestra-v_table[i-1]))/(v_table[i]-v_table[i-1]))+temp_table[i-1]);
+	return (((((temp_table[i]-temp_table[i-1])*(muestra-v_table[i-1]))/(v_table[i]-v_table[i-1]))+temp_table[i-1])*scale/100 + offset);
 
 }
 
-int32_t getMAP(){
+int32_t getMAP(int16_t scale,int16_t offset){
 	int32_t muestra=0;
 	unsigned char i=0;
 	Board_ADC_ReadBegin(ADC_CH2);
 	while(Board_ADC_ReadWait());
-	//Obtengo muestra y convierto a mV
+	/*Obtengo muestra y convierto a mV*/
 	muestra=((int32_t)Board_ADC_ReadEnd()*conv_num)/conv_den;
-	//Respuesta lineal, 0v=0%, 5v=100% (recordar que uso 5v porque en la conversión de muestra ya adapte 3.3 a 5)
-	return (100*muestra)/5000;
+
+	/*Respuesta lineal, 0v=0%, 5000mV=100% (recordar que uso 5v porque en la conversión de muestra ya adapte 3.3 a 5)*/
+	/*Ademas recordar que scale es sobre 100 */
+	return ((scale*muestra)/5000 + offset);
 }
 
-int32_t getTPS(){
+int32_t getTPS(int16_t scale,int16_t offset){
 	int32_t muestra=0;
 	unsigned char i=0;
 	Board_ADC_ReadBegin(ADC_CH3);
 	while(Board_ADC_ReadWait());
-	//Obtengo muestra y convierto a mV
+	/*Obtengo muestra y convierto a mV*/
 	muestra=((int32_t)Board_ADC_ReadEnd()*conv_num)/conv_den;
-	//Respuesta lineal, 0v=0%, 5v=100% (recordar que uso 5v porque en la conversión de muestra ya adapte 3.3 a 5)
-	return (100*muestra)/5000;
+	/*Respuesta lineal, 0v=0%, 5000mV=100% (recordar que uso 5v porque en la conversión de muestra ya adapte 3.3 a 5)*/
+	/*Ademas recordar que scale es sobre 100 */
+	return ((scale*muestra)/5000 + offset);
 }
 
 int32_t getRPM(){
 
-	/*La condicion de timediff mayor que 0xfffffffe se da cuando todavia falta tomar un valor para determinar
-			el periodo, o cuando el periodo es muy largo, es decir, motor detenido (ver comentarios handler timer)
+	/*
+	La condicion de timediff mayor que 0xfffffffe se da cuando todavia falta tomar un valor para determinar
+	el periodo, o cuando el periodo es muy largo, es decir, motor detenido (ver comentarios handler timer)
 	*/
 	if (time_diff<0xFFFFFFFE){
 		//Motor 4 cil, 2 pulsos por vuelta -> 60 seg/min * 1000000uS/(2*timediff S/vuelta)
@@ -212,24 +225,35 @@ void SysTick_Handler(void)
 
 int main(void)
 {
-	int uart_task=255;
-	static char uartBuff[10];
+	int uart_task=255; /* Variable para pedir dato por UART */
+	static char uartBuff[10];	/* Buffer para itoa */
 
+	/* Variables sensores */
 	int32_t EngineTemp=0;
 	int32_t MAT=0;
 	int32_t MAP=0;
 	int32_t TPS=0;
 	int32_t RPM=0;
 
-	//Tension en mV
-	int32_t tmotor_x []= {240,280,330,370,430,510,580,660,740,880,990,1150,1300,1490,1670,1910,2150,2430,2680,2940,3190,3470,3680,3900,4080};
-	//Temperatura en °C
-	int32_t tmotor_y []= {120,115,110,105,100,95,90,85,80,75,70,65,60,55,50,45,40,35,30,25,20,15,10,5,0};
+	/* Variables calibración. Recordar que scale va en scale/100 */
+	int16_t TM_scale=100;
+	int16_t MAT_scale=100;
+	int16_t MAP_scale=100;
+	int16_t TPS_scale=100;
+	int16_t TM_offset=0;
+	int16_t MAT_offset=0;
+	int16_t MAP_offset=0;
+	int16_t TPS_offset=0;
 
-	//Tension en mV
-	int32_t mat_x[]={50,134,200,266,347,394,466,545,595,665,761,870,979,1142,1275,1446,1624,1821,2010,2240,2470,2680,2970,3240,3510,3720,3910,4070,4200};
-	//Temperatura en °C
-	int32_t mat_y[]={125,120,115,110,105,100,95,90,85,80,75,70,65,60,55,50,45,40,35,30,25,20,15,10,5,0,-5,-10,-15};
+	/*Tension en mV*/
+	int32_t tmotor_x [engine_temp_table_size]= {240,280,330,370,430,510,580,660,740,880,990,1150,1300,1490,1670,1910,2150,2430,2680,2940,3190,3470,3680,3900,4080};
+	/*Temperatura en °C*/
+	int32_t tmotor_y [engine_temp_table_size]= {120,115,110,105,100,95,90,85,80,75,70,65,60,55,50,45,40,35,30,25,20,15,10,5,0};
+
+	/*Tension en mV*/
+	int32_t mat_x[mat_table_size]={50,134,200,266,347,394,466,545,595,665,761,870,979,1142,1275,1446,1624,1821,2010,2240,2470,2680,2970,3240,3510,3720,3910,4070,4200};
+	/*Temperatura en °C*/
+	int32_t mat_y[mat_table_size]={125,120,115,110,105,100,95,90,85,80,75,70,65,60,55,50,45,40,35,30,25,20,15,10,5,0,-5,-10,-15};
 
 	Timer2_incap_init();
 
@@ -277,7 +301,39 @@ int main(void)
 			Board_UARTPutSTR(BLUETOOTH_UART, uartBuff);
 			uart_task=255;
 		break;
+/*
+		case 5:
+			TM_offset=Board_UARTGetChar(BLUETOOTH_UART);
+		break;
 
+		case 6:
+			TM_scale=Board_UARTGetChar(BLUETOOTH_UART);
+		break;
+
+		case 7:
+			MAT_offset=Board_UARTGetChar(BLUETOOTH_UART);
+		break;
+
+		case 8:
+			MAT_scale=Board_UARTGetChar(BLUETOOTH_UART);
+		break;
+
+		case 9:
+			MAP_offset=Board_UARTGetChar(BLUETOOTH_UART);
+		break;
+
+		case 10:
+			MAP_scale=Board_UARTGetChar(BLUETOOTH_UART);
+		break;
+
+		case 11:
+			TPS_offset=Board_UARTGetChar(BLUETOOTH_UART);
+		break;
+
+		case 12:
+			TPS_scale=Board_UARTGetChar(BLUETOOTH_UART);
+		break;
+*/
 		default:
 			uart_task=255;
 		break;
@@ -287,11 +343,11 @@ int main(void)
 			counter=DELAY_MS;
 			Board_LED_Toggle(LED);
 
-			//Actualizo valores de todos los sensores
-			EngineTemp=getEngineTemp(tmotor_x,tmotor_y);
-			MAT=getMAT(mat_x,mat_y);
-			MAP=getMAP();
-			TPS=getTPS();
+			/*Actualizo valores de todos los sensores*/
+			EngineTemp=getEngineTemp(tmotor_x,tmotor_y,TM_scale,TM_offset);
+			MAT=getMAT(mat_x,mat_y,MAT_scale,MAT_offset);
+			MAP=getMAP(MAP_scale,MAP_offset);
+			TPS=getTPS(TPS_scale,TPS_offset);
 			RPM=getRPM();
 
 		}
