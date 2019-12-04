@@ -157,4 +157,5 @@ void Board_SystemInit(void)
        external memory. */
     Board_SetupMuxing();
     Board_SetupClocking();
+    Board_Init();
 }

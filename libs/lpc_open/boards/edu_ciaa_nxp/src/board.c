@@ -172,7 +172,7 @@ static void Board_ADC_Init()
    Chip_ADC_SetResolution(LPC_ADC0, &cs, BOARD_ADC_RESOLUTION);
 }
 
-//Esta de debug uart no la uso, uso la general (la de abajo)
+/*Esta inicializacion no la uso, uso la general: Board_Uart_Init()*/
 void Board_Debug_Init(void)
 {
    Chip_UART_Init(DEBUG_UART);
@@ -245,23 +245,23 @@ void Board_LED_Toggle(uint8_t LEDNumber)
 
 void Board_Init(void)
 {
-   Board_Uart_Init(DEBUG_UART, DEBUG_UART_BAUD_RATE);
+	Board_Uart_Init(DEBUG_UART, DEBUG_UART_BAUD_RATE);
 	Board_Uart_Init(BLUETOOTH_UART, BLUETOOTH_UART_BAUD_RATE);
-   Board_GPIO_Init();
-   Board_ADC_Init();
-   Board_SPI_Init();
-   Board_I2C_Init();
+	Board_GPIO_Init();
+	Board_ADC_Init();
+	Board_SPI_Init();
+	Board_I2C_Init();
 
-   Board_LED_Init();
-   Board_TEC_Init();
+	Board_LED_Init();
+	Board_TEC_Init();
 
 #ifdef USE_RMII
    Chip_ENET_RMIIEnable(LPC_ETHERNET);
 #endif
 
-   // Update SystemCoreClock variable
+   /*Update SystemCoreClock variable*/
    SystemCoreClockUpdate();
-   // Initialize SysTick
+   /*Initialize SysTick period 1mS*/
    SysTick_Config(SystemCoreClock / 1000);
 }
 

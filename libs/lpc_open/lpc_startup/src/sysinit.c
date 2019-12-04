@@ -41,5 +41,4 @@ void SystemInit(void)
 
    /* Board specific SystemInit */
    Board_SystemInit();
-   Board_Init();
 }

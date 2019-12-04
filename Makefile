@@ -17,8 +17,8 @@ BOARD = edu_ciaa_nxp
 # Program path and name ------------------------------------------------
 
 # Program path and name default values
-PROGRAM_PATH = proyecto
-PROGRAM_NAME = blinky
+#PROGRAM_PATH = no lo uso porque esta en directorio raiz
+PROGRAM_NAME = proyecto
 
 # Program path and name from an external program.mk file
 -include program.mk

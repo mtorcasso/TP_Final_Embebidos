@@ -93,11 +93,6 @@ int32_t getEngineTemp(int32_t* v_table,int32_t* temp_table,int16_t scale,int16_t
 	//Obtengo muestra y convierto a mV
 	muestra=((int32_t)Board_ADC_ReadEnd()*conv_num)/conv_den;
 
-	char caca [10];
-	itoa(muestra, caca, 10 );
-	Board_UARTPutSTR(DEBUG_UART,caca);
-	Board_UARTPutSTR(DEBUG_UART,"\r\n");
-
 	//Hago un ajuste lineal entre valores de la tabla
 	while ((v_table[i]<muestra) && (i<engine_temp_table_size)) i++;
 	return (((((temp_table[i]-temp_table[i-1])*(muestra-v_table[i-1]))/(v_table[i]-v_table[i-1]))+temp_table[i-1])*scale/100 + offset);
@@ -138,13 +133,13 @@ int32_t getTPS(int16_t scale,int16_t offset){
 	while(Board_ADC_ReadWait());
 	/*Obtengo muestra y convierto a mV*/
 	muestra=((int32_t)Board_ADC_ReadEnd()*conv_num)/conv_den;
+
 	/*Respuesta lineal, 0v=0%, 5000mV=100% (recordar que uso 5v porque en la conversión de muestra ya adapte 3.3 a 5)*/
 	/*Ademas recordar que scale es sobre 100 */
 	return ((scale*muestra)/5000 + offset);
 }
 
 int32_t getRPM(){
-
 	/*
 	La condicion de timediff mayor que 0xfffffffe se da cuando todavia falta tomar un valor para determinar
 	el periodo, o cuando el periodo es muy largo, es decir, motor detenido (ver comentarios handler timer)
@@ -156,7 +151,14 @@ int32_t getRPM(){
 	else return 0;
 }
 
-#define timer_limit 1000000
+/*Para actualizar el valor de calibracion, funcion bloqueante, se queda esperando el dato por bluetooth*/
+void update_calibration (int16_t* parametro){
+	while (!(Chip_UART_ReadLineStatus(BLUETOOTH_UART) & UART_LSR_RDR));
+	*parametro= (int8_t) Chip_UART_ReadByte(BLUETOOTH_UART);
+}
+
+#define timer_limit 1000000 /*Valor del match register para resetear el timer*/
+#define timer_freq 1000000 /*frec=1mhz, T=1uS*/
 void Timer2_incap_init(void){
 	Chip_SCU_PinMux(6,1, MD_PLN_FAST, SCU_MODE_FUNC5); //config SCU en port 6 pin 1
 	Chip_TIMER_Init(LPC_TIMER2);
@@ -168,7 +170,7 @@ void Timer2_incap_init(void){
 	    Chip_TIMER_TIMER_SetCountClockSrc(LPC_TIMER2, TIMER_CAPSRC_RISING_PCLK, 0);
 
 	    //Configuro captura
-	    Chip_TIMER_PrescaleSet(LPC_TIMER2, 204); // Cuenta a 204M/204= 1mhz = 1us
+	    Chip_TIMER_PrescaleSet(LPC_TIMER2, SystemCoreClock/timer_freq); // Cuenta a 204M/204= 1mhz = 1us
 	    Chip_TIMER_ClearCapture(LPC_TIMER2, 0);
 	    Chip_TIMER_CaptureRisingEdgeEnable(LPC_TIMER2, 0);
 	    //Chip_TIMER_CaptureFallingEdgeEnable (LPC_TIMER2, 0);
@@ -225,7 +227,15 @@ void SysTick_Handler(void)
 
 int main(void)
 {
-	int uart_task=255; /* Variable para pedir dato por UART */
+
+	/*
+	 * El pin muxing, el clock, y la inicializacion de perisfericos se realizan en la funcion Board_SystemInit() del archivo
+	 * board_sysinit.c dentro de la libreria lpc open. Esta función es llamada luego de un reset en el archivo arm7m_startup.c
+	 * dentro de la libreria CMSIS. Es decir reset->cmis llama a sysinit de lpcopen->setea pinmux,clock y llama a Board_init
+	 * del archivo board.c de la libreria LPCopen
+	*/
+
+	int uart_task=255; /* Variable para pedir dato por UART, 255 ninguna instruccion*/
 	static char uartBuff[10];	/* Buffer para itoa */
 
 	/* Variables sensores */
@@ -235,15 +245,16 @@ int main(void)
 	int32_t TPS=0;
 	int32_t RPM=0;
 
-	/* Variables calibración. Recordar que scale va en scale/100 */
-	int16_t TM_scale=100;
-	int16_t MAT_scale=100;
-	int16_t MAP_scale=100;
-	int16_t TPS_scale=100;
-	int16_t TM_offset=0;
-	int16_t MAT_offset=0;
-	int16_t MAP_offset=0;
-	int16_t TPS_offset=0;
+	/* Punteros para guardar calibración en memoria no volatil*/
+	/*Recordar que tengo que escribir de a 4 byte, por eso son int32*/
+	int32_t * tmo = (int32_t *)EEPROM_ADDRESS(0, 0);
+	int32_t * tms = (int32_t *)EEPROM_ADDRESS(0, 4);
+	int32_t * mato = (int32_t *)EEPROM_ADDRESS(0, 8);
+	int32_t * mats = (int32_t *)EEPROM_ADDRESS(0, 12);
+	int32_t * mapo = (int32_t *)EEPROM_ADDRESS(0, 16);
+	int32_t * maps = (int32_t *)EEPROM_ADDRESS(0, 20);
+	int32_t * tpso = (int32_t *)EEPROM_ADDRESS(0, 24);
+	int32_t * tpss = (int32_t *)EEPROM_ADDRESS(0, 28);
 
 	/*Tension en mV*/
 	int32_t tmotor_x [engine_temp_table_size]= {240,280,330,370,430,510,580,660,740,880,990,1150,1300,1490,1670,1910,2150,2430,2680,2940,3190,3470,3680,3900,4080};
@@ -255,7 +266,23 @@ int main(void)
 	/*Temperatura en °C*/
 	int32_t mat_y[mat_table_size]={125,120,115,110,105,100,95,90,85,80,75,70,65,60,55,50,45,40,35,30,25,20,15,10,5,0,-5,-10,-15};
 
+	/* Inicializo el timer 2 como input capture*/
 	Timer2_incap_init();
+
+	/*Inicializo eeprom para guardar valores de calibracion*/
+	/*Recordar que tengo que escribir de a 4 byte, entonces uso punteros int32*/
+	Chip_EEPROM_Init(LPC_EEPROM);
+	Chip_EEPROM_SetAutoProg(LPC_EEPROM, EEPROM_AUTOPROG_AFT_1WORDWRITTEN);
+
+	/* Cargo variables calibración en RAM. Recordar que scale va en scale/100 */
+	int16_t TM_scale=*tms;
+	int16_t MAT_scale=*mats;
+	int16_t MAP_scale=*maps;
+	int16_t TPS_scale=*tpss;
+	int16_t TM_offset=*tmo;
+	int16_t MAT_offset=*mato;
+	int16_t MAP_offset=*mapo;
+	int16_t TPS_offset=*tpso;
 
 	while (1)
 	{
@@ -267,6 +294,7 @@ int main(void)
 
 		switch (uart_task){
 
+		/* De 0 a 4, envio los valores de los sensores pedidos*/
 		case 0:
 			itoa(EngineTemp, uartBuff, 10 );
 			Board_UARTPutChar(BLUETOOTH_UART,strlen(uartBuff));
@@ -301,39 +329,85 @@ int main(void)
 			Board_UARTPutSTR(BLUETOOTH_UART, uartBuff);
 			uart_task=255;
 		break;
-/*
-		case 5:
-			TM_offset=Board_UARTGetChar(BLUETOOTH_UART);
+
+		/* Del 128 al 135, recibo y escribo en ram los valores de calibracion*/
+		case 128:
+			update_calibration (&TM_offset);
+			uart_task=255;
 		break;
 
-		case 6:
-			TM_scale=Board_UARTGetChar(BLUETOOTH_UART);
+		case 129:
+			update_calibration (&TM_scale);
+			uart_task=255;
 		break;
 
-		case 7:
-			MAT_offset=Board_UARTGetChar(BLUETOOTH_UART);
+		case 130:
+			update_calibration (&MAT_offset);
+			uart_task=255;
 		break;
 
-		case 8:
-			MAT_scale=Board_UARTGetChar(BLUETOOTH_UART);
+		case 131:
+			update_calibration (&MAT_scale);
+			uart_task=255;
 		break;
 
-		case 9:
-			MAP_offset=Board_UARTGetChar(BLUETOOTH_UART);
+		case 132:
+			update_calibration (&MAP_offset);
+			uart_task=255;
 		break;
 
-		case 10:
-			MAP_scale=Board_UARTGetChar(BLUETOOTH_UART);
+		case 133:
+			update_calibration (&MAP_scale);
+			uart_task=255;
 		break;
 
-		case 11:
-			TPS_offset=Board_UARTGetChar(BLUETOOTH_UART);
+		case 134:
+			update_calibration (&TPS_offset);
+			uart_task=255;
 		break;
 
-		case 12:
-			TPS_scale=Board_UARTGetChar(BLUETOOTH_UART);
+		case 135:
+			update_calibration (&TPS_scale);
+			uart_task=255;
 		break;
-*/
+
+		case 136:
+			/*Envio valores de calibracion*/
+			Board_UARTPutChar(BLUETOOTH_UART,TM_offset);
+			Board_UARTPutChar(BLUETOOTH_UART,TM_scale);
+			Board_UARTPutChar(BLUETOOTH_UART,MAT_offset);
+			Board_UARTPutChar(BLUETOOTH_UART,MAT_scale);
+			Board_UARTPutChar(BLUETOOTH_UART,MAP_offset);
+			Board_UARTPutChar(BLUETOOTH_UART,MAP_scale);
+			Board_UARTPutChar(BLUETOOTH_UART,TPS_offset);
+			Board_UARTPutChar(BLUETOOTH_UART,TPS_scale);
+			uart_task=255;
+
+		break;
+
+		case 137:
+			/*Grabo valores de calibracion en memoria no volatil*/
+
+			*tms=TM_scale;
+			Chip_EEPROM_WaitForIntStatus(LPC_EEPROM, EEPROM_INT_ENDOFPROG);
+			*mats=MAT_scale;
+			Chip_EEPROM_WaitForIntStatus(LPC_EEPROM, EEPROM_INT_ENDOFPROG);
+			*maps=MAP_scale;
+			Chip_EEPROM_WaitForIntStatus(LPC_EEPROM, EEPROM_INT_ENDOFPROG);
+			*tpss=TPS_scale;
+			Chip_EEPROM_WaitForIntStatus(LPC_EEPROM, EEPROM_INT_ENDOFPROG);
+			*tmo=TM_offset;
+			Chip_EEPROM_WaitForIntStatus(LPC_EEPROM, EEPROM_INT_ENDOFPROG);
+			*mato=MAT_offset;
+			Chip_EEPROM_WaitForIntStatus(LPC_EEPROM, EEPROM_INT_ENDOFPROG);
+			*mapo=MAP_offset;
+			Chip_EEPROM_WaitForIntStatus(LPC_EEPROM, EEPROM_INT_ENDOFPROG);
+			*tpso=TPS_offset;
+			Chip_EEPROM_WaitForIntStatus(LPC_EEPROM, EEPROM_INT_ENDOFPROG);
+
+			uart_task=255;
+		break;
+
 		default:
 			uart_task=255;
 		break;
@@ -343,7 +417,7 @@ int main(void)
 			counter=DELAY_MS;
 			Board_LED_Toggle(LED);
 
-			/*Actualizo valores de todos los sensores*/
+			/*Update sensor values*/
 			EngineTemp=getEngineTemp(tmotor_x,tmotor_y,TM_scale,TM_offset);
 			MAT=getMAT(mat_x,mat_y,MAT_scale,MAT_offset);
 			MAP=getMAP(MAP_scale,MAP_offset);
